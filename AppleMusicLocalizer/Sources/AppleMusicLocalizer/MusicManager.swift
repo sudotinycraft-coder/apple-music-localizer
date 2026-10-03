@@ -23,40 +23,55 @@ class MusicManager: ObservableObject {
         end tell
         """
         
-        var error: NSDictionary?
-        if let scriptObject = NSAppleScript(source: scriptSource) {
-            let output = scriptObject.executeAndReturnError(&error)
+        // 改用 Process 呼叫系統原生 osascript，以繼承終端機權限並觸發 TCC 授權提示
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", scriptSource]
+        
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        
+        do {
+            try process.run()
+            process.waitUntilExit()
             
-            if error != nil {
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            if let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) {
                 DispatchQueue.main.async {
-                    self.statusMessage = "讀取失敗：AppleScript 執行錯誤"
-                    self.currentTrackName = nil
-                    self.currentArtistName = nil
+                    self.handleScriptOutput(output)
                 }
-                return
             }
-            
-            if let resultString = output.stringValue {
-                DispatchQueue.main.async {
-                    if resultString == "ERROR_NOT_RUNNING" {
-                        self.statusMessage = "Apple Music 尚未開啟"
-                        self.currentTrackName = nil
-                        self.currentArtistName = nil
-                    } else if resultString == "ERROR_NO_TRACK" {
-                        self.statusMessage = "目前沒有正在播放的歌曲"
-                        self.currentTrackName = nil
-                        self.currentArtistName = nil
-                    } else {
-                        let components = resultString.components(separatedBy: "|||")
-                        if components.count == 2 {
-                            self.currentTrackName = components[0]
-                            self.currentArtistName = components[1]
-                            self.statusMessage = "成功讀取歌曲資訊"
-                        } else {
-                            self.statusMessage = "讀取失敗：資料解析錯誤"
-                        }
-                    }
-                }
+        } catch {
+            DispatchQueue.main.async {
+                self.statusMessage = "執行指令失敗：\\(error.localizedDescription)"
+                self.currentTrackName = nil
+                self.currentArtistName = nil
+            }
+        }
+    }
+    
+    private func handleScriptOutput(_ output: String) {
+        if output.contains("ERROR_NOT_RUNNING") {
+            self.statusMessage = "Apple Music 尚未開啟"
+            self.currentTrackName = nil
+            self.currentArtistName = nil
+        } else if output.contains("ERROR_NO_TRACK") {
+            self.statusMessage = "目前沒有正在播放的歌曲"
+            self.currentTrackName = nil
+            self.currentArtistName = nil
+        } else if output.isEmpty || output.contains("execution error") || output.contains("Not authorized") {
+            self.statusMessage = "權限遭阻擋 (請在系統設定中允許終端機控制Music)"
+            self.currentTrackName = nil
+            self.currentArtistName = nil
+        } else {
+            let components = output.components(separatedBy: "|||")
+            if components.count == 2 {
+                self.currentTrackName = components[0]
+                self.currentArtistName = components[1]
+                self.statusMessage = "成功讀取歌曲資訊"
+            } else {
+                self.statusMessage = "讀取失敗：資料解析錯誤"
             }
         }
     }
