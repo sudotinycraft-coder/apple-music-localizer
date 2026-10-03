@@ -11,7 +11,7 @@ struct AppleMusicLocalizerApp: App {
 }
 
 struct ContentView: View {
-    @State private var statusMessage: String = "就緒"
+    @StateObject private var musicManager = MusicManager()
 
     var body: some View {
         VStack(spacing: 20) {
@@ -23,12 +23,27 @@ struct ContentView: View {
                 .font(.largeTitle)
                 .bold()
             
-            Text("點擊下方按鈕以讀取目前播放的歌曲資訊")
-                .foregroundColor(.secondary)
+            if let trackName = musicManager.currentTrackName,
+               let artistName = musicManager.currentArtistName {
+                VStack(spacing: 5) {
+                    Text("目前歌曲：\(trackName)")
+                        .font(.title3)
+                        .bold()
+                    Text("歌手：\(artistName)")
+                        .foregroundColor(.secondary)
+                }
+                .padding()
+                .background(Color.secondary.opacity(0.1))
+                .cornerRadius(10)
+            } else {
+                Text("尚未讀取或目前無播放歌曲")
+                    .foregroundColor(.secondary)
+                    .padding()
+            }
             
             Button(action: {
-                // TODO: 實作讀取 Music.app 邏輯
-                statusMessage = "正在掃描..."
+                musicManager.statusMessage = "正在掃描..."
+                musicManager.fetchCurrentTrack()
             }) {
                 Text("掃描目前歌曲")
                     .padding(.horizontal, 20)
@@ -36,7 +51,7 @@ struct ContentView: View {
             }
             .buttonStyle(.borderedProminent)
             
-            Text(statusMessage)
+            Text(musicManager.statusMessage)
                 .font(.caption)
                 .foregroundColor(.gray)
         }
