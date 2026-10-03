@@ -5,7 +5,7 @@ struct AppleMusicLocalizerApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .frame(minWidth: 500, minHeight: 450)
+                .frame(minWidth: 500, minHeight: 500)
         }
     }
 }
@@ -39,11 +39,13 @@ struct ContentView: View {
                             .foregroundColor(.secondary)
                     }
                     
-                    // 若有搜尋到原文，顯示建議區塊
+                    // 若有搜尋到原文，顯示建議區塊與套用按鈕
                     if let propTrack = musicManager.proposedTrackName,
-                       let propArtist = musicManager.proposedArtistName {
+                       let propArtist = musicManager.proposedArtistName,
+                       !musicManager.canUndo {  // 當還沒套用修改時，才顯示建議
+                        
                         Divider()
-                        VStack(alignment: .leading, spacing: 5) {
+                        VStack(alignment: .leading, spacing: 10) {
                             Text("✨ 建議替換的原文")
                                 .font(.headline)
                                 .foregroundColor(.green)
@@ -52,6 +54,17 @@ struct ContentView: View {
                                 .bold()
                             Text("歌手：\(propArtist)")
                                 .foregroundColor(.secondary)
+                            
+                            Button(action: {
+                                musicManager.applyProposedMetadata()
+                            }) {
+                                Text("套用修改")
+                                    .fontWeight(.bold)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 8)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.green)
                         }
                     }
                 }
@@ -65,14 +78,29 @@ struct ContentView: View {
                     .padding()
             }
             
-            Button(action: {
-                musicManager.fetchCurrentTrack()
-            }) {
-                Text("掃描目前歌曲")
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 5)
+            HStack(spacing: 15) {
+                Button(action: {
+                    musicManager.fetchCurrentTrack()
+                }) {
+                    Text(musicManager.canUndo ? "掃描下一首" : "掃描目前歌曲")
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 5)
+                }
+                .buttonStyle(.borderedProminent)
+                
+                // 復原按鈕 (只有在套用修改後才會出現)
+                if musicManager.canUndo {
+                    Button(action: {
+                        musicManager.undoMetadata()
+                    }) {
+                        Text("復原修改 (Undo)")
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 5)
+                    }
+                    .buttonStyle(.bordered)
+                    .foregroundColor(.red)
+                }
             }
-            .buttonStyle(.borderedProminent)
             
             Text(musicManager.statusMessage)
                 .font(.caption)

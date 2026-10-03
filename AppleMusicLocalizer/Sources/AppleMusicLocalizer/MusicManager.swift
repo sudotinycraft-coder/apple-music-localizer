@@ -1,18 +1,23 @@
 import Foundation
 import Combine
 
+@MainActor
 class MusicManager: ObservableObject {
     @Published var currentTrackName: String?
     @Published var currentArtistName: String?
     
-    // 新增：建議替換的原文資訊
     @Published var proposedTrackName: String?
     @Published var proposedArtistName: String?
     
+    // 用於 Undo (復原) 機制的備份變數
+    @Published var originalTrackName: String?
+    @Published var originalArtistName: String?
+    @Published var canUndo: Bool = false
+    
     @Published var statusMessage: String = "就緒"
 
+    // MARK: - 1. 讀取目前歌曲
     func fetchCurrentTrack() {
-        // 重置狀態
         self.proposedTrackName = nil
         self.proposedArtistName = nil
         self.statusMessage = "正在讀取..."
@@ -33,30 +38,10 @@ class MusicManager: ObservableObject {
         end tell
         """
         
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = ["-e", scriptSource]
-        
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-        
-        do {
-            try process.run()
-            process.waitUntilExit()
-            
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            if let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) {
-                DispatchQueue.main.async {
-                    self.handleScriptOutput(output)
-                }
-            }
-        } catch {
-            DispatchQueue.main.async {
-                self.statusMessage = "執行指令失敗：\\(error.localizedDescription)"
-                self.currentTrackName = nil
-                self.currentArtistName = nil
-            }
+        // 透過 Task 非同步執行，避免阻塞主執行緒 (Main Thread)
+        Task {
+            let output = await runScript(source: scriptSource, args: [])
+            handleScriptOutput(output)
         }
     }
     
@@ -81,9 +66,13 @@ class MusicManager: ObservableObject {
                 
                 self.currentTrackName = track
                 self.currentArtistName = artist
-                self.statusMessage = "成功讀取，正在搜尋原文..."
                 
-                // 啟動 API 搜尋
+                // 重置 Undo 狀態 (針對不同歌曲)
+                self.canUndo = false
+                self.originalTrackName = track
+                self.originalArtistName = artist
+                
+                self.statusMessage = "成功讀取，正在搜尋原文..."
                 searchOriginalName(artist: artist, track: track)
                 
             } else {
@@ -92,25 +81,107 @@ class MusicManager: ObservableObject {
         }
     }
     
+    // MARK: - 2. 搜尋原文 (API)
     private func searchOriginalName(artist: String, track: String) {
         Task {
             do {
-                // 預設先使用 jp (日本)，後續可做成 UI 選擇
                 if let result = try await APIService.shared.searchTrack(artist: artist, track: track, country: "jp") {
-                    DispatchQueue.main.async {
-                        self.proposedTrackName = result.trackName
-                        self.proposedArtistName = result.artistName
-                        self.statusMessage = "搜尋完成！"
-                    }
+                    self.proposedTrackName = result.trackName
+                    self.proposedArtistName = result.artistName
+                    self.statusMessage = "搜尋完成！"
                 } else {
-                    DispatchQueue.main.async {
-                        self.statusMessage = "找不到對應的原文歌曲"
-                    }
+                    self.statusMessage = "找不到對應的原文歌曲"
                 }
             } catch {
-                DispatchQueue.main.async {
-                    self.statusMessage = "API 搜尋發生錯誤"
-                }
+                self.statusMessage = "API 搜尋發生錯誤"
+            }
+        }
+    }
+    
+    // MARK: - 3. 套用修改 (寫入 Apple Music)
+    func applyProposedMetadata() {
+        guard let newTrack = proposedTrackName, let newArtist = proposedArtistName else { return }
+        
+        let scriptSource = """
+        on run argv
+            set newName to item 1 of argv
+            set newArtist to item 2 of argv
+            tell application "Music"
+                if it is running then
+                    try
+                        set name of current track to newName
+                        set artist of current track to newArtist
+                    end try
+                end if
+            end tell
+        end run
+        """
+        
+        Task {
+            let output = await runScript(source: scriptSource, args: [newTrack, newArtist])
+            if output.contains("execution error") {
+                self.statusMessage = "修改失敗"
+            } else {
+                self.currentTrackName = newTrack
+                self.currentArtistName = newArtist
+                self.canUndo = true
+                self.statusMessage = "修改成功！"
+            }
+        }
+    }
+    
+    // MARK: - 4. 復原修改 (Undo)
+    func undoMetadata() {
+        guard let oldTrack = originalTrackName, let oldArtist = originalArtistName, canUndo else { return }
+        
+        let scriptSource = """
+        on run argv
+            set oldName to item 1 of argv
+            set oldArtist to item 2 of argv
+            tell application "Music"
+                if it is running then
+                    try
+                        set name of current track to oldName
+                        set artist of current track to oldArtist
+                    end try
+                end if
+            end tell
+        end run
+        """
+        
+        Task {
+            let output = await runScript(source: scriptSource, args: [oldTrack, oldArtist])
+            if output.contains("execution error") {
+                self.statusMessage = "復原失敗"
+            } else {
+                self.currentTrackName = oldTrack
+                self.currentArtistName = oldArtist
+                self.canUndo = false
+                self.statusMessage = "已復原為原先名稱。"
+            }
+        }
+    }
+    
+    // MARK: - Helper: 背景執行 AppleScript (隔離於主執行緒)
+    nonisolated private func runScript(source: String, args: [String]) async -> String {
+        return await withCheckedContinuation { continuation in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            process.arguments = ["-e", source] + args
+            
+            let pipe = Pipe()
+            process.standardOutput = pipe
+            process.standardError = pipe
+            
+            do {
+                try process.run()
+                process.waitUntilExit()
+                
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                continuation.resume(returning: output)
+            } catch {
+                continuation.resume(returning: "execution error")
             }
         }
     }
