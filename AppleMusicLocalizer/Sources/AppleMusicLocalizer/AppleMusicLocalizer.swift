@@ -5,7 +5,7 @@ struct AppleMusicLocalizerApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .frame(minWidth: 500, minHeight: 400)
+                .frame(minWidth: 500, minHeight: 450)
         }
     }
 }
@@ -25,16 +25,40 @@ struct ContentView: View {
             
             if let trackName = musicManager.currentTrackName,
                let artistName = musicManager.currentArtistName {
-                VStack(spacing: 5) {
-                    Text("目前歌曲：\(trackName)")
-                        .font(.title3)
-                        .bold()
-                    Text("歌手：\(artistName)")
-                        .foregroundColor(.secondary)
+                
+                VStack(alignment: .leading, spacing: 15) {
+                    // 目前的名稱區塊
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("📍 目前歌曲資訊")
+                            .font(.headline)
+                            .foregroundColor(.secondary)
+                        Text("歌名：\(trackName)")
+                            .font(.title3)
+                            .bold()
+                        Text("歌手：\(artistName)")
+                            .foregroundColor(.secondary)
+                    }
+                    
+                    // 若有搜尋到原文，顯示建議區塊
+                    if let propTrack = musicManager.proposedTrackName,
+                       let propArtist = musicManager.proposedArtistName {
+                        Divider()
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text("✨ 建議替換的原文")
+                                .font(.headline)
+                                .foregroundColor(.green)
+                            Text("歌名：\(propTrack)")
+                                .font(.title3)
+                                .bold()
+                            Text("歌手：\(propArtist)")
+                                .foregroundColor(.secondary)
+                        }
+                    }
                 }
                 .padding()
                 .background(Color.secondary.opacity(0.1))
                 .cornerRadius(10)
+                
             } else {
                 Text("尚未讀取或目前無播放歌曲")
                     .foregroundColor(.secondary)
@@ -42,7 +66,6 @@ struct ContentView: View {
             }
             
             Button(action: {
-                musicManager.statusMessage = "正在掃描..."
                 musicManager.fetchCurrentTrack()
             }) {
                 Text("掃描目前歌曲")
@@ -55,6 +78,6 @@ struct ContentView: View {
                 .font(.caption)
                 .foregroundColor(.gray)
         }
-        .padding()
+        .padding(30)
     }
 }

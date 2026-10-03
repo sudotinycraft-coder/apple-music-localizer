@@ -4,9 +4,19 @@ import Combine
 class MusicManager: ObservableObject {
     @Published var currentTrackName: String?
     @Published var currentArtistName: String?
+    
+    // 新增：建議替換的原文資訊
+    @Published var proposedTrackName: String?
+    @Published var proposedArtistName: String?
+    
     @Published var statusMessage: String = "就緒"
 
     func fetchCurrentTrack() {
+        // 重置狀態
+        self.proposedTrackName = nil
+        self.proposedArtistName = nil
+        self.statusMessage = "正在讀取..."
+        
         let scriptSource = """
         tell application "Music"
             if it is running then
@@ -23,7 +33,6 @@ class MusicManager: ObservableObject {
         end tell
         """
         
-        // 改用 Process 呼叫系統原生 osascript，以繼承終端機權限並觸發 TCC 授權提示
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
         process.arguments = ["-e", scriptSource]
@@ -67,11 +76,41 @@ class MusicManager: ObservableObject {
         } else {
             let components = output.components(separatedBy: "|||")
             if components.count == 2 {
-                self.currentTrackName = components[0]
-                self.currentArtistName = components[1]
-                self.statusMessage = "成功讀取歌曲資訊"
+                let track = components[0]
+                let artist = components[1]
+                
+                self.currentTrackName = track
+                self.currentArtistName = artist
+                self.statusMessage = "成功讀取，正在搜尋原文..."
+                
+                // 啟動 API 搜尋
+                searchOriginalName(artist: artist, track: track)
+                
             } else {
                 self.statusMessage = "讀取失敗：資料解析錯誤"
+            }
+        }
+    }
+    
+    private func searchOriginalName(artist: String, track: String) {
+        Task {
+            do {
+                // 預設先使用 jp (日本)，後續可做成 UI 選擇
+                if let result = try await APIService.shared.searchTrack(artist: artist, track: track, country: "jp") {
+                    DispatchQueue.main.async {
+                        self.proposedTrackName = result.trackName
+                        self.proposedArtistName = result.artistName
+                        self.statusMessage = "搜尋完成！"
+                    }
+                } else {
+                    DispatchQueue.main.async {
+                        self.statusMessage = "找不到對應的原文歌曲"
+                    }
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.statusMessage = "API 搜尋發生錯誤"
+                }
             }
         }
     }
