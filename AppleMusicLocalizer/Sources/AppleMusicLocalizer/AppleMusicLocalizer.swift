@@ -5,13 +5,14 @@ struct AppleMusicLocalizerApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .frame(minWidth: 500, minHeight: 500)
+                .frame(minWidth: 500, minHeight: 540)
         }
     }
 }
 
 struct ContentView: View {
     @StateObject private var musicManager = MusicManager()
+    private let donateURL = URL(string: "https://buymeacoffee.com/sudo.tinycraft")!
 
     var body: some View {
         VStack(spacing: 20) {
@@ -42,7 +43,7 @@ struct ContentView: View {
                     // 若有搜尋到原文，顯示建議區塊與套用按鈕
                     if let propTrack = musicManager.proposedTrackName,
                        let propArtist = musicManager.proposedArtistName,
-                       !musicManager.canUndo {  // 當還沒套用修改時，才顯示建議
+                       !musicManager.canUndo {
                         
                         Divider()
                         VStack(alignment: .leading, spacing: 10) {
@@ -105,6 +106,23 @@ struct ContentView: View {
             Text(musicManager.statusMessage)
                 .font(.caption)
                 .foregroundColor(.gray)
+            
+            Divider()
+            
+            // Donate 贊助區塊
+            Button(action: {
+                NSWorkspace.shared.open(donateURL)
+            }) {
+                HStack(spacing: 8) {
+                    Text("☕️")
+                    Text("這工具讓你開心嗎？和開發者分享這份喜悅")
+                        .font(.footnote)
+                        .fontWeight(.medium)
+                }
+                .foregroundColor(.brown)
+            }
+            .buttonStyle(.plain)
+            .help("點擊以前往贊助頁面，您的支持是開發者持續維護的最大動力！")
         }
         .padding(30)
     }
