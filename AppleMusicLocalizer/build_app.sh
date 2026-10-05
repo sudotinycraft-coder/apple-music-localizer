@@ -24,6 +24,12 @@ mkdir -p "${RESOURCES_DIR}"
 EXECUTABLE_PATH=$(swift build -c release --show-bin-path)/${APP_NAME}
 cp "${EXECUTABLE_PATH}" "${MACOS_DIR}/"
 
+# 複製 App 圖示
+if [ -f "Resources/AppIcon.icns" ]; then
+    echo "複製 AppIcon.icns 至 Resources..."
+    cp "Resources/AppIcon.icns" "${RESOURCES_DIR}/"
+fi
+
 # 建立 Info.plist
 # 非常重要：必須宣告 NSAppleEventsUsageDescription，否則 macOS 會直接阻擋 App 控制 Music 的行為
 cat > "${CONTENTS_DIR}/Info.plist" <<EOF
@@ -33,6 +39,8 @@ cat > "${CONTENTS_DIR}/Info.plist" <<EOF
 <dict>
     <key>CFBundleExecutable</key>
     <string>${APP_NAME}</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleIdentifier</key>
     <string>${BUNDLE_ID}</string>
     <key>CFBundleName</key>
