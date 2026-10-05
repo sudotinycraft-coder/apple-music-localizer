@@ -44,7 +44,11 @@ final class MusicManager: ObservableObject {
                     end try
                     if trackAlbumArtist is "" then set trackAlbumArtist to artist of trackItem as text
                     if trackAlbumArtist is currentAlbumArtist then
-                        set output to output & "TRACK|||" & (disc number of trackItem as text) & "|||" & (track number of trackItem as text) & "|||" & (persistent ID of trackItem as text) & "|||" & (name of trackItem as text) & "|||" & (artist of trackItem as text) & "|||" & (album of trackItem as text) & linefeed
+                        set trackDuration to ""
+                        try
+                            set trackDuration to duration of trackItem as text
+                        end try
+                        set output to output & "TRACK|||" & (disc number of trackItem as text) & "|||" & (track number of trackItem as text) & "|||" & (persistent ID of trackItem as text) & "|||" & (name of trackItem as text) & "|||" & (artist of trackItem as text) & "|||" & (album of trackItem as text) & "|||" & trackDuration & linefeed
                     end if
                 end repeat
                 return output
@@ -106,9 +110,10 @@ final class MusicManager: ObservableObject {
                   let discNumber = Int(fields[1]),
                   let trackNumber = Int(fields[2]),
                   !fields[3].isEmpty else { continue }
+            let durationSeconds = fields.count >= 8 ? (Double(fields[7]) ?? 0.0) : 0.0
             localTracks.append(LocalTrack(
                 id: fields[3], discNumber: discNumber, trackNumber: trackNumber, name: fields[4],
-                artist: fields[5], album: fields[6], durationMs: 0
+                artist: fields[5], album: fields[6], durationSeconds: durationSeconds
             ))
         }
         guard !localTracks.isEmpty else {
@@ -126,21 +131,91 @@ final class MusicManager: ObservableObject {
                 artist: currentFields[4], album: currentFields[3], localTracks: tracks, country: "jp"
             )
             let apiTracks = albumMatch.tracks
-            let byNumber = Dictionary(apiTracks.compactMap { track -> (String, iTunesTrack)? in
-                guard let number = track.trackNumber else { return nil }
-                return ("\(track.discNumber ?? 1):\(number)", track)
-            }, uniquingKeysWith: { first, _ in first })
+
+            // 多維度配對演算法 (Smart Matching Pipeline)
+            // 優先以「碟片 + 曲目編號 + 播放長度誤差 <= 4 秒」進行第一輪精確配對，避免多單曲/不同版本造成的曲目編號衝突。
+            var matchedAPITrackIDs = Set<String>()
+            var localToRemote = [String: iTunesTrack]() // local.id -> iTunesTrack
+
+            // 第一輪：碟片、曲目編號吻合，且時長誤差在 4 秒內
+            for local in tracks {
+                if let candidate = apiTracks.first(where: { remote in
+                    guard let rDisc = remote.discNumber, let rTrack = remote.trackNumber, let rMs = remote.trackTimeMillis else { return false }
+                    let uniqueKey = "\(rDisc):\(rTrack)"
+                    guard !matchedAPITrackIDs.contains(uniqueKey) else { return false }
+                    let discMatch = (rDisc == local.discNumber)
+                    let trackMatch = (rTrack == local.trackNumber)
+                    let durationDiff = abs((Double(rMs) / 1000.0) - local.durationSeconds)
+                    return discMatch && trackMatch && durationDiff <= 4.0
+                }) {
+                    let key = "\(candidate.discNumber ?? 1):\(candidate.trackNumber ?? 0)"
+                    matchedAPITrackIDs.insert(key)
+                    localToRemote[local.id] = candidate
+                }
+            }
+
+            // 第二輪：全域最小時長差貪婪配對 (Global Minimal Duration Diff Matching)
+            // 當本機曲目編號位移（例如先行單曲的軌號與整張專輯不同）時，將所有未配對的曲目與未認領的 API 曲目計算時長誤差，
+            // 依「時長誤差最小」由小到大貪婪配對，徹底解決多首歌曲時長相近時被「唯一候選」條件誤殺的問題。
+            let unmatchedLocals = tracks.filter { localToRemote[$0.id] == nil && $0.durationSeconds > 0 }
+            let remainingAPITracks = apiTracks.filter { remote in
+                guard let rDisc = remote.discNumber, let rTrack = remote.trackNumber else { return false }
+                return !matchedAPITrackIDs.contains("\(rDisc):\(rTrack)")
+            }
+
+            struct MatchCandidate {
+                let localID: String
+                let apiTrack: iTunesTrack
+                let diffSeconds: Double
+            }
+
+            var candidatePairs = [MatchCandidate]()
+            for local in unmatchedLocals {
+                for remote in remainingAPITracks {
+                    guard let rMs = remote.trackTimeMillis else { continue }
+                    let diff = abs((Double(rMs) / 1000.0) - local.durationSeconds)
+                    if diff <= 4.0 {
+                        candidatePairs.append(MatchCandidate(localID: local.id, apiTrack: remote, diffSeconds: diff))
+                    }
+                }
+            }
+            // 依時長誤差由小到大排序，優先鎖定最精確的配對
+            candidatePairs.sort { $0.diffSeconds < $1.diffSeconds }
+
+            var assignedLocalIDs = Set<String>()
+            for pair in candidatePairs {
+                let remoteKey = "\(pair.apiTrack.discNumber ?? 1):\(pair.apiTrack.trackNumber ?? 0)"
+                if !assignedLocalIDs.contains(pair.localID) && !matchedAPITrackIDs.contains(remoteKey) {
+                    assignedLocalIDs.insert(pair.localID)
+                    matchedAPITrackIDs.insert(remoteKey)
+                    localToRemote[pair.localID] = pair.apiTrack
+                }
+            }
+
+            // 第三輪：標準備援，僅碟片與曲目編號吻合（針對本機未回報時長或時長被修改的特殊音軌）
+            for local in tracks where localToRemote[local.id] == nil {
+                if let candidate = apiTracks.first(where: { remote in
+                    guard let rDisc = remote.discNumber, let rTrack = remote.trackNumber else { return false }
+                    let uniqueKey = "\(rDisc):\(rTrack)"
+                    guard !matchedAPITrackIDs.contains(uniqueKey) else { return false }
+                    return (rDisc == local.discNumber && rTrack == local.trackNumber)
+                }) {
+                    let key = "\(candidate.discNumber ?? 1):\(candidate.trackNumber ?? 0)"
+                    matchedAPITrackIDs.insert(key)
+                    localToRemote[local.id] = candidate
+                }
+            }
 
             tracks = tracks.map { local in
                 var updated = local
-                if let remote = byNumber["\(local.discNumber):\(local.trackNumber)"] {
+                if let remote = localToRemote[local.id] {
                     updated.proposedName = remote.trackName
                     updated.proposedArtist = remote.artistName
                 }
                 return updated
             }
             let mapped = tracks.filter(\.hasProposal).count
-            statusMessage = "API 專輯「\(albumMatch.collectionName)」以 \(albumMatch.matchedTrackCount) 個曲目編號配對，\(mapped) 首可套用"
+            statusMessage = "API 專輯「\(albumMatch.collectionName)」配對成功，共 \(mapped) 首可套用"
         } catch {
             statusMessage = "專輯曲目查詢失敗：\(error.localizedDescription)"
         }

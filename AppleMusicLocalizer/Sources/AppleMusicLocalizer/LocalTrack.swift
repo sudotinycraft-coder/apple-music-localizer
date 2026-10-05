@@ -8,7 +8,7 @@ struct LocalTrack: Identifiable {
     var name: String
     var artist: String
     let album: String
-    let durationMs: Int
+    let durationSeconds: Double
 
     var proposedName: String?
     var proposedArtist: String?
