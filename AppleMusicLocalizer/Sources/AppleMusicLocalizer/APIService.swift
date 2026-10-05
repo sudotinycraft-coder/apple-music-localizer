@@ -89,18 +89,69 @@ final class APIService {
             return iTunesAlbumMatch(collectionName: name, tracks: orderedTracks, matchedTrackCount: overlap)
         }
 
-        guard let best = candidates.sorted(by: {
-            if $0.matchedTrackCount != $1.matchedTrackCount { return $0.matchedTrackCount > $1.matchedTrackCount }
-            let leftDistance = abs($0.tracks.count - localTracks.count)
-            let rightDistance = abs($1.tracks.count - localTracks.count)
-            if leftDistance != rightDistance { return leftDistance < rightDistance }
-            return $0.collectionName < $1.collectionName
-        }).first,
-        best.matchedTrackCount >= min(localTracks.count, max(2, (localTracks.count + 1) / 2)) else {
+        struct CandidateScore {
+            let match: iTunesAlbumMatch
+            let artistScore: Int       // 3: 完全吻合, 2: 包含關係, 0: 無關
+            let overlapCount: Int
+            let countDistance: Int
+            let avgDurationDiff: Double
+        }
+
+        let localNormArtist = Self.normalized(artist)
+
+        let scoredCandidates: [CandidateScore] = candidates.map { candidate in
+            let candidateArtist = candidate.tracks.first?.artistName ?? ""
+            let remoteNormArtist = Self.normalized(candidateArtist)
+
+            let artistScore: Int
+            if !localNormArtist.isEmpty && localNormArtist == remoteNormArtist {
+                artistScore = 3
+            } else if !localNormArtist.isEmpty && (localNormArtist.contains(remoteNormArtist) || remoteNormArtist.contains(localNormArtist)) {
+                artistScore = 2
+            } else {
+                artistScore = 0
+            }
+
+            // 計算與本機曲目的平均時長誤差
+            var totalDiff = 0.0
+            var matchedDurationCount = 0
+            for local in localTracks where local.durationSeconds > 0 {
+                if let remote = candidate.tracks.first(where: {
+                    ($0.discNumber ?? 1) == local.discNumber && ($0.trackNumber ?? 0) == local.trackNumber
+                }), let rMs = remote.trackTimeMillis {
+                    totalDiff += abs((Double(rMs) / 1000.0) - local.durationSeconds)
+                    matchedDurationCount += 1
+                }
+            }
+            let avgDiff = matchedDurationCount > 0 ? (totalDiff / Double(matchedDurationCount)) : 999.0
+
+            return CandidateScore(
+                match: candidate,
+                artistScore: artistScore,
+                overlapCount: candidate.matchedTrackCount,
+                countDistance: abs(candidate.tracks.count - localTracks.count),
+                avgDurationDiff: avgDiff
+            )
+        }
+
+        // 排序優先級：
+        // 1. 歌手相符度最高 (artistScore)
+        // 2. 軌數重疊最多 (overlapCount)
+        // 3. 平均時長誤差最小 (avgDurationDiff)
+        // 4. 曲目總數最接近 (countDistance)
+        let sorted = scoredCandidates.sorted {
+            if $0.artistScore != $1.artistScore { return $0.artistScore > $1.artistScore }
+            if $0.overlapCount != $1.overlapCount { return $0.overlapCount > $1.overlapCount }
+            if abs($0.avgDurationDiff - $1.avgDurationDiff) > 0.5 { return $0.avgDurationDiff < $1.avgDurationDiff }
+            return $0.countDistance < $1.countDistance
+        }
+
+        guard let bestScore = sorted.first,
+              bestScore.overlapCount >= min(localTracks.count, max(1, (localTracks.count + 1) / 2)) else {
             let names = Array(Set(candidates.map(\.collectionName))).sorted()
             throw APIServiceError.noAlbumMatch(album: album, candidates: names)
         }
-        return best
+        return bestScore.match
     }
 
     static func normalized(_ value: String) -> String {
