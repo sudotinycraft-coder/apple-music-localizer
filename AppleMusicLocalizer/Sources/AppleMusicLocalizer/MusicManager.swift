@@ -227,7 +227,11 @@ final class MusicManager: ObservableObject {
             proposedAlbumName = albumMatch.collectionName
             updateAlbumName = (albumMatch.collectionName != albumName)
             let mapped = tracks.filter(\.hasProposal).count
-            statusMessage = "API 專輯「\(albumMatch.collectionName)」配對成功，共 \(mapped) 首可套用"
+            if mapped == 0 && !hasAlbumProposal {
+                statusMessage = "API 專輯「\(albumMatch.collectionName)」配對成功，目前專輯與曲目皆已為原文名稱"
+            } else {
+                statusMessage = "API 專輯「\(albumMatch.collectionName)」配對成功，共 \(mapped) 首可套用"
+            }
         } catch {
             statusMessage = "專輯曲目查詢失敗：\(error.localizedDescription)"
         }
@@ -282,6 +286,13 @@ final class MusicManager: ObservableObject {
                     set newAlbum to item (i + 3) of argv
                     try
                         set targetTrack to first track of library playlist 1 whose persistent ID is targetID
+                        set oldTrackArtist to artist of targetTrack as text
+                        try
+                            set oldAlbumArtist to album artist of targetTrack as text
+                            if oldAlbumArtist is oldTrackArtist then
+                                set album artist of targetTrack to newArtist
+                            end if
+                        end try
                         set name of targetTrack to newName
                         set artist of targetTrack to newArtist
                         set album of targetTrack to newAlbum
@@ -308,6 +319,9 @@ final class MusicManager: ObservableObject {
                     if shouldUpdateAlbum && !targetAlbum.isEmpty {
                         tracks[index].album = targetAlbum
                     }
+                }
+                if let firstProposedArtist = selectedTracks.first?.proposedArtist {
+                    albumArtistName = firstProposedArtist
                 }
                 if shouldUpdateAlbum && !targetAlbum.isEmpty {
                     albumName = targetAlbum
@@ -339,6 +353,13 @@ final class MusicManager: ObservableObject {
                     set oldAlbum to item (i + 3) of argv
                     try
                         set targetTrack to first track of library playlist 1 whose persistent ID is targetID
+                        set currentTrackArtist to artist of targetTrack as text
+                        try
+                            set currentAlbumArtist to album artist of targetTrack as text
+                            if currentAlbumArtist is currentTrackArtist then
+                                set album artist of targetTrack to oldArtist
+                            end if
+                        end try
                         set name of targetTrack to oldName
                         set artist of targetTrack to oldArtist
                         set album of targetTrack to oldAlbum
@@ -361,6 +382,9 @@ final class MusicManager: ObservableObject {
                         tracks[index].artist = backup.artist
                         tracks[index].album = backup.album
                     }
+                }
+                if let firstBackupArtist = backups.first?.artist {
+                    albumArtistName = firstBackupArtist
                 }
                 if let backupAlbumName {
                     albumName = backupAlbumName

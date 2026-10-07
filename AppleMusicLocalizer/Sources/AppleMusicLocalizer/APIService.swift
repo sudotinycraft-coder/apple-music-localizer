@@ -61,11 +61,23 @@ final class APIService {
         let result = try JSONDecoder().decode(iTunesSearchResponse.self, from: data).results
         guard !result.isEmpty else { throw APIServiceError.noSearchResults(album: album) }
         let localKeys = Set(localTracks.map { "\($0.discNumber):\($0.trackNumber)" })
-        let groups = Dictionary(grouping: result.filter { $0.collectionName != nil }) { track in
-            track.collectionId.map { "id:\($0)" } ?? "name:\(Self.normalized(track.collectionName ?? ""))"
+        var firstAppearanceRank: [String: Int] = [:]
+        var groupedTracks: [String: [iTunesTrack]] = [:]
+        for (index, track) in result.enumerated() {
+            guard let colName = track.collectionName else { continue }
+            let key = track.collectionId.map { "id:\($0)" } ?? "name:\(Self.normalized(colName))"
+            if firstAppearanceRank[key] == nil {
+                firstAppearanceRank[key] = index
+            }
+            groupedTracks[key, default: []].append(track)
         }
 
-        let candidates: [iTunesAlbumMatch] = groups.values.compactMap { group in
+        struct CandidateGroup {
+            let match: iTunesAlbumMatch
+            let searchRank: Int
+        }
+
+        let candidates: [CandidateGroup] = groupedTracks.compactMap { key, group in
             guard let name = group.first?.collectionName else { return nil }
             let keys = Set(group.compactMap { track -> String? in
                 guard let number = track.trackNumber else { return nil }
@@ -86,30 +98,36 @@ final class APIService {
                     if leftDisc != rightDisc { return leftDisc < rightDisc }
                     return ($0.trackNumber ?? Int.max) < ($1.trackNumber ?? Int.max)
                 }
-            return iTunesAlbumMatch(collectionName: name, tracks: orderedTracks, matchedTrackCount: overlap)
+            let match = iTunesAlbumMatch(collectionName: name, tracks: orderedTracks, matchedTrackCount: overlap)
+            return CandidateGroup(match: match, searchRank: firstAppearanceRank[key] ?? Int.max)
         }
 
         struct CandidateScore {
             let match: iTunesAlbumMatch
-            let artistScore: Int       // 3: 完全吻合, 2: 包含關係, 0: 無關
+            let isDurationPlausible: Bool
+            let artistScore: Int       // 3: 完全吻合, 2: 長字串包含關係, 0: 無關或跨語系別名
             let overlapCount: Int
-            let countDistance: Int
             let avgDurationDiff: Double
+            let searchRank: Int        // iTunes Search API 原生相關性排名 (越小越相關)
+            let countDistance: Int
         }
 
-        let localNormArtist = Self.normalized(artist)
+        let localNormArtists = Set(([artist] + localTracks.map(\.artist)).map(Self.normalized).filter { !$0.isEmpty })
 
-        let scoredCandidates: [CandidateScore] = candidates.map { candidate in
+        let scoredCandidates: [CandidateScore] = candidates.map { item in
+            let candidate = item.match
             let candidateArtist = candidate.tracks.first?.artistName ?? ""
             let remoteNormArtist = Self.normalized(candidateArtist)
 
-            let artistScore: Int
-            if !localNormArtist.isEmpty && localNormArtist == remoteNormArtist {
-                artistScore = 3
-            } else if !localNormArtist.isEmpty && (localNormArtist.contains(remoteNormArtist) || remoteNormArtist.contains(localNormArtist)) {
-                artistScore = 2
-            } else {
-                artistScore = 0
+            var artistScore = 0
+            if !remoteNormArtist.isEmpty {
+                if localNormArtists.contains(remoteNormArtist) {
+                    artistScore = 3
+                } else if remoteNormArtist.count >= 4,
+                          localNormArtists.contains(where: { $0.count >= 4 && ($0.contains(remoteNormArtist) || remoteNormArtist.contains($0)) }) {
+                    // 限制至少 4 個字元才允許子字串包含比對，防止如 "RU" 誤匹配 "yoRUshika"
+                    artistScore = 2
+                }
             }
 
             // 計算與本機曲目的平均時長誤差
@@ -124,31 +142,38 @@ final class APIService {
                 }
             }
             let avgDiff = matchedDurationCount > 0 ? (totalDiff / Double(matchedDurationCount)) : 999.0
+            let isDurationPlausible = matchedDurationCount == 0 || avgDiff <= 4.0
 
             return CandidateScore(
                 match: candidate,
+                isDurationPlausible: isDurationPlausible,
                 artistScore: artistScore,
                 overlapCount: candidate.matchedTrackCount,
-                countDistance: abs(candidate.tracks.count - localTracks.count),
-                avgDurationDiff: avgDiff
+                avgDurationDiff: avgDiff,
+                searchRank: item.searchRank,
+                countDistance: abs(candidate.tracks.count - localTracks.count)
             )
         }
 
         // 排序優先級：
-        // 1. 歌手相符度最高 (artistScore)
-        // 2. 軌數重疊最多 (overlapCount)
-        // 3. 平均時長誤差最小 (avgDurationDiff)
-        // 4. 曲目總數最接近 (countDistance)
+        // 1. 時長合理性 (isDurationPlausible：平均時長誤差 <= 4 秒者優先)
+        // 2. 歌手相符度 (artistScore)
+        // 3. 軌數重疊最多 (overlapCount)
+        // 4. 平均時長誤差最小 (精確至 0.1 秒，原曲母帶通常誤差接近 0.0 秒，能區分翻唱版)
+        // 5. iTunes API 原生搜尋相關性順位 (searchRank，Apple 後端具備跨語系藝人/曲名映射能力，原曲通常排第 1)
+        // 6. 曲目總數最接近 (countDistance)
         let sorted = scoredCandidates.sorted {
+            if $0.isDurationPlausible != $1.isDurationPlausible { return $0.isDurationPlausible && !$1.isDurationPlausible }
             if $0.artistScore != $1.artistScore { return $0.artistScore > $1.artistScore }
             if $0.overlapCount != $1.overlapCount { return $0.overlapCount > $1.overlapCount }
-            if abs($0.avgDurationDiff - $1.avgDurationDiff) > 0.5 { return $0.avgDurationDiff < $1.avgDurationDiff }
+            if abs($0.avgDurationDiff - $1.avgDurationDiff) > 0.1 { return $0.avgDurationDiff < $1.avgDurationDiff }
+            if $0.searchRank != $1.searchRank { return $0.searchRank < $1.searchRank }
             return $0.countDistance < $1.countDistance
         }
 
         guard let bestScore = sorted.first,
               bestScore.overlapCount >= min(localTracks.count, max(1, (localTracks.count + 1) / 2)) else {
-            let names = Array(Set(candidates.map(\.collectionName))).sorted()
+            let names = Array(Set(candidates.map(\.match.collectionName))).sorted()
             throw APIServiceError.noAlbumMatch(album: album, candidates: names)
         }
         return bestScore.match
