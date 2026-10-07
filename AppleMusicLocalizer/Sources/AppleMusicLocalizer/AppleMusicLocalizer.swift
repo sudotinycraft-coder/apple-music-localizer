@@ -146,20 +146,28 @@ struct ContentView: View {
             }
 
             Divider()
-            // Donate 贊助區塊
-            Button(action: {
-                NSWorkspace.shared.open(donateURL)
-            }) {
-                HStack(spacing: 8) {
-                    Text("☕️")
-                    Text("這工具讓你開心嗎？和開發者分享這份喜悅")
-                        .font(.footnote)
-                        .fontWeight(.medium)
+            // Bottom Bar: Donate 贊助與版本標籤
+            HStack {
+                Button(action: {
+                    NSWorkspace.shared.open(donateURL)
+                }) {
+                    HStack(spacing: 8) {
+                        Text("☕️")
+                        Text("這工具讓你開心嗎？和開發者分享這份喜悅")
+                            .font(.footnote)
+                            .fontWeight(.medium)
+                    }
+                    .foregroundColor(.brown)
                 }
-                .foregroundColor(.brown)
+                .buttonStyle(.plain)
+                .help("點擊以前往贊助頁面，您的支持是開發者持續維護的最大動力！")
+                
+                Spacer()
+                
+                Text("v1.0.5")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
             }
-            .buttonStyle(.plain)
-            .help("點擊以前往贊助頁面，您的支持是開發者持續維護的最大動力！")
         }
         .padding(20)
     }

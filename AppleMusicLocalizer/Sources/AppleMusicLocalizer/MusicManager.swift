@@ -216,11 +216,25 @@ final class MusicManager: ObservableObject {
                 }
             }
 
+            // 解決 iTunes API 針對同專輯回傳不一致的歌手名稱（例如有些是 Yorushika，有些是 ヨルシカ）
+            let matchedAPIArtists = localToRemote.values.compactMap(\.artistName)
+            let mostFrequentAPIArtist = matchedAPIArtists.reduce(into: [:]) { $0[$1, default: 0] += 1 }
+                .max(by: { $0.value < $1.value })?.key
+            
+            let localArtists = tracks.map(\.artist)
+            let mostFrequentLocalArtist = localArtists.reduce(into: [:]) { $0[$1, default: 0] += 1 }
+                .max(by: { $0.value < $1.value })?.key
+
             tracks = tracks.map { local in
                 var updated = local
                 if let remote = localToRemote[local.id] {
                     updated.proposedName = remote.trackName
-                    updated.proposedArtist = remote.artistName
+                    // 若這首本地曲目的歌手是該專輯的主要歌手，則強制統一為 API 上的主要歌手，避免名稱分歧
+                    if local.artist == mostFrequentLocalArtist, let unifiedArtist = mostFrequentAPIArtist {
+                        updated.proposedArtist = unifiedArtist
+                    } else {
+                        updated.proposedArtist = remote.artistName
+                    }
                 }
                 return updated
             }
