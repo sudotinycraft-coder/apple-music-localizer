@@ -7,17 +7,27 @@ final class MusicManager: ObservableObject {
     @Published var currentArtistName: String?
     @Published var albumName: String?
     @Published var albumArtistName: String?
+    @Published var proposedAlbumName: String?
+    @Published var updateAlbumName = true
     @Published var tracks: [LocalTrack] = []
     @Published var canUndo = false
     @Published var statusMessage = "就緒"
     @Published var isBusy = false
 
     private var backups: [TrackBackup] = []
+    private var backupAlbumName: String?
+
+    var hasAlbumProposal: Bool {
+        guard let proposedAlbumName, let albumName else { return false }
+        return !proposedAlbumName.isEmpty && proposedAlbumName != albumName
+    }
 
     func fetchCurrentAlbum() {
         isBusy = true
         canUndo = false
         backups = []
+        backupAlbumName = nil
+        proposedAlbumName = nil
         tracks = []
         statusMessage = "正在讀取目前歌曲與專輯曲目…"
 
@@ -214,6 +224,8 @@ final class MusicManager: ObservableObject {
                 }
                 return updated
             }
+            proposedAlbumName = albumMatch.collectionName
+            updateAlbumName = (albumMatch.collectionName != albumName)
             let mapped = tracks.filter(\.hasProposal).count
             statusMessage = "API 專輯「\(albumMatch.collectionName)」配對成功，共 \(mapped) 首可套用"
         } catch {
@@ -235,27 +247,44 @@ final class MusicManager: ObservableObject {
 
     func applySelectedMetadata() {
         let selectedTracks = tracks.filter { $0.isSelected && $0.hasProposal }
-        guard !selectedTracks.isEmpty else {
-            statusMessage = "請先勾選至少一首有建議名稱的曲目"
+        let shouldUpdateAlbum = updateAlbumName && hasAlbumProposal
+        guard !selectedTracks.isEmpty || shouldUpdateAlbum else {
+            statusMessage = "請先勾選至少一首有建議名稱的曲目，或勾選更新專輯名稱"
             return
         }
 
-        let args = selectedTracks.flatMap { track in
-            [track.id, track.proposedName ?? track.name, track.proposedArtist ?? track.artist]
+        let selectedIDs = Set(selectedTracks.map(\.id))
+        let targetAlbum = shouldUpdateAlbum ? (proposedAlbumName ?? albumName ?? "") : ""
+        // 若勾選同步更新專輯名稱，需對同專輯所有曲目統一寫入新專輯名，避免專輯在 Apple Music 中被拆散為兩張
+        let tracksToUpdate = shouldUpdateAlbum ? tracks : selectedTracks
+
+        let args = tracksToUpdate.flatMap { track -> [String] in
+            let isTrackSelected = selectedIDs.contains(track.id)
+            let newName = isTrackSelected ? (track.proposedName ?? track.name) : track.name
+            let newArtist = isTrackSelected ? (track.proposedArtist ?? track.artist) : track.artist
+            let newAlbum = shouldUpdateAlbum && !targetAlbum.isEmpty ? targetAlbum : track.album
+            return [track.id, newName, newArtist, newAlbum]
         }
-        backups = selectedTracks.map { TrackBackup(persistentID: $0.id, name: $0.name, artist: $0.artist) }
+
+        backups = tracksToUpdate.map {
+            TrackBackup(persistentID: $0.id, name: $0.name, artist: $0.artist, album: $0.album)
+        }
+        backupAlbumName = albumName
         isBusy = true
+
         let source = #"""
         on run argv
             tell application "Music"
-                repeat with i from 1 to (count of argv) by 3
+                repeat with i from 1 to (count of argv) by 4
                     set targetID to item i of argv
                     set newName to item (i + 1) of argv
                     set newArtist to item (i + 2) of argv
+                    set newAlbum to item (i + 3) of argv
                     try
                         set targetTrack to first track of library playlist 1 whose persistent ID is targetID
                         set name of targetTrack to newName
                         set artist of targetTrack to newArtist
+                        set album of targetTrack to newAlbum
                     on error errorMessage
                         return "ERROR|||" & errorMessage
                     end try
@@ -271,12 +300,26 @@ final class MusicManager: ObservableObject {
                 canUndo = true
                 statusMessage = "批次套用中斷；已保留復原資料：\(output)"
             } else {
-                for index in tracks.indices where selectedTracks.contains(where: { $0.id == tracks[index].id }) {
-                    tracks[index].name = tracks[index].proposedName ?? tracks[index].name
-                    tracks[index].artist = tracks[index].proposedArtist ?? tracks[index].artist
+                for index in tracks.indices {
+                    if selectedIDs.contains(tracks[index].id) {
+                        tracks[index].name = tracks[index].proposedName ?? tracks[index].name
+                        tracks[index].artist = tracks[index].proposedArtist ?? tracks[index].artist
+                    }
+                    if shouldUpdateAlbum && !targetAlbum.isEmpty {
+                        tracks[index].album = targetAlbum
+                    }
+                }
+                if shouldUpdateAlbum && !targetAlbum.isEmpty {
+                    albumName = targetAlbum
                 }
                 canUndo = true
-                statusMessage = "已套用 \(selectedTracks.count) 首曲目，可復原"
+                if shouldUpdateAlbum && !selectedTracks.isEmpty {
+                    statusMessage = "已更新專輯為「\(targetAlbum)」並套用 \(selectedTracks.count) 首曲目，可復原"
+                } else if shouldUpdateAlbum {
+                    statusMessage = "已更新專輯名稱為「\(targetAlbum)」，可復原"
+                } else {
+                    statusMessage = "已套用 \(selectedTracks.count) 首曲目，可復原"
+                }
             }
             isBusy = false
         }
@@ -284,19 +327,21 @@ final class MusicManager: ObservableObject {
 
     func undoMetadata() {
         guard canUndo, !backups.isEmpty else { return }
-        let args = backups.flatMap { [$0.persistentID, $0.name, $0.artist] }
+        let args = backups.flatMap { [$0.persistentID, $0.name, $0.artist, $0.album] }
         isBusy = true
         let source = #"""
         on run argv
             tell application "Music"
-                repeat with i from 1 to (count of argv) by 3
+                repeat with i from 1 to (count of argv) by 4
                     set targetID to item i of argv
                     set oldName to item (i + 1) of argv
                     set oldArtist to item (i + 2) of argv
+                    set oldAlbum to item (i + 3) of argv
                     try
                         set targetTrack to first track of library playlist 1 whose persistent ID is targetID
                         set name of targetTrack to oldName
                         set artist of targetTrack to oldArtist
+                        set album of targetTrack to oldAlbum
                     on error errorMessage
                         return "ERROR|||" & errorMessage
                     end try
@@ -314,11 +359,16 @@ final class MusicManager: ObservableObject {
                     if let backup = backups.first(where: { $0.persistentID == tracks[index].id }) {
                         tracks[index].name = backup.name
                         tracks[index].artist = backup.artist
+                        tracks[index].album = backup.album
                     }
+                }
+                if let backupAlbumName {
+                    albumName = backupAlbumName
                 }
                 canUndo = false
                 backups = []
-                statusMessage = "已還原原始曲目資訊"
+                backupAlbumName = nil
+                statusMessage = "已還原原始專輯與曲目資訊"
             }
             isBusy = false
         }

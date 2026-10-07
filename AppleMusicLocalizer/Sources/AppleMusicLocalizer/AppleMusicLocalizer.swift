@@ -22,6 +22,12 @@ struct ContentView: View {
         !selectableTracks.isEmpty && selectableTracks.allSatisfy(\.isSelected)
     }
 
+    private var canApply: Bool {
+        let hasSelectedTrack = selectableTracks.contains(where: \.isSelected)
+        let hasSelectedAlbum = musicManager.hasAlbumProposal && musicManager.updateAlbumName
+        return hasSelectedTrack || hasSelectedAlbum
+    }
+
     var body: some View {
         VStack(spacing: 16) {
             HStack(spacing: 12) {
@@ -51,12 +57,32 @@ struct ContentView: View {
             }
 
             if let album = musicManager.albumName {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(album).font(.headline)
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(album).font(.headline)
+                        if let proposedAlbum = musicManager.proposedAlbumName,
+                           proposedAlbum != album {
+                            Image(systemName: "arrow.right")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text(proposedAlbum)
+                                .font(.headline)
+                                .foregroundStyle(.green)
+                        }
+                    }
                     Text("專輯歌手：\(musicManager.albumArtistName ?? "未知")　目前播放：\(musicManager.currentTrackName ?? "未知") · \(musicManager.currentArtistName ?? "未知")")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
+
+                    if musicManager.hasAlbumProposal,
+                       let proposedAlbum = musicManager.proposedAlbumName,
+                       !musicManager.canUndo {
+                        Toggle("同步將專輯名稱更新為「\(proposedAlbum)」", isOn: $musicManager.updateAlbumName)
+                            .toggleStyle(.checkbox)
+                            .font(.subheadline)
+                            .padding(.top, 2)
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(12)
@@ -115,7 +141,7 @@ struct ContentView: View {
                         musicManager.applySelectedMetadata()
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(musicManager.isBusy || selectableTracks.allSatisfy { !$0.isSelected })
+                    .disabled(musicManager.isBusy || !canApply)
                 }
             }
 

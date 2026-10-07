@@ -7,7 +7,7 @@ struct LocalTrack: Identifiable {
     let trackNumber: Int
     var name: String
     var artist: String
-    let album: String
+    var album: String
     let durationSeconds: Double
 
     var proposedName: String?
@@ -24,4 +24,5 @@ struct TrackBackup {
     let persistentID: String
     let name: String
     let artist: String
+    let album: String
 }
