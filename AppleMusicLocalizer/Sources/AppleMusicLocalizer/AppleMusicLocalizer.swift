@@ -70,10 +70,18 @@ struct ContentView: View {
                                 .foregroundStyle(.green)
                         }
                     }
-                    Text("專輯歌手：\(musicManager.albumArtistName ?? "未知")　目前播放：\(musicManager.currentTrackName ?? "未知") · \(musicManager.currentArtistName ?? "未知")")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                    HStack(spacing: 4) {
+                        Text("專輯歌手：\(musicManager.albumArtistName ?? "未知")")
+                        if let proposedAlbumArtist = musicManager.proposedAlbumArtistName,
+                           proposedAlbumArtist != musicManager.albumArtistName {
+                            Text("→ \(proposedAlbumArtist)")
+                                .foregroundStyle(.green)
+                        }
+                        Text("　目前播放：\(musicManager.currentTrackName ?? "未知") · \(musicManager.currentArtistName ?? "未知")")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
 
                     if musicManager.hasAlbumProposal,
                        let proposedAlbum = musicManager.proposedAlbumName,
@@ -137,6 +145,13 @@ struct ContentView: View {
                     .lineLimit(2)
                 Spacer()
                 if !musicManager.canUndo {
+                    if !musicManager.tracks.isEmpty && !canApply {
+                        Button("強制合併同名分類") {
+                            musicManager.applySelectedMetadata(forceMergeAll: true)
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(musicManager.isBusy)
+                    }
                     Button("套用已勾選曲目") {
                         musicManager.applySelectedMetadata()
                     }
@@ -164,7 +179,7 @@ struct ContentView: View {
                 
                 Spacer()
                 
-                Text("v1.0.5")
+                Text("v1.0.7")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
@@ -210,6 +225,19 @@ struct ContentView: View {
                     Text(track.artist)
                     if let artist = track.proposedArtist, track.hasProposal {
                         Text("→ \(artist)")
+                    }
+                    if let propAlbumArtist = track.proposedAlbumArtist, !propAlbumArtist.utf8.elementsEqual(track.albumArtist.utf8) {
+                        Text("（專輯歌手：\(track.albumArtist) → \(propAlbumArtist)）")
+                            .foregroundStyle(.orange)
+                    } else if let propArtist = track.proposedArtist, !track.sortArtist.isEmpty, !track.sortArtist.utf8.elementsEqual(propArtist.utf8) {
+                        Text("（排序歌手：\(track.sortArtist) → \(propArtist)）")
+                            .foregroundStyle(.orange)
+                    } else if let propAlbum = track.proposedAlbum, !track.sortAlbum.isEmpty, !track.sortAlbum.utf8.elementsEqual(propAlbum.utf8) {
+                        Text("（排序專輯：\(track.sortAlbum) → \(propAlbum)）")
+                            .foregroundStyle(.orange)
+                    } else if let propName = track.proposedName, propName == track.name, !propName.utf8.elementsEqual(track.name.utf8) {
+                        Text("（修正日文濁音編碼 NFD → NFC）")
+                            .foregroundStyle(.orange)
                     }
                 }
                 .font(.caption)

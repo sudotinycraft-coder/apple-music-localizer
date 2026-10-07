@@ -3,7 +3,7 @@
 # 設定參數
 APP_NAME="AppleMusicLocalizer"
 BUNDLE_ID="com.andy.AppleMusicLocalizer"
-VERSION="1.0.0"
+VERSION="1.0.7"
 
 echo "開始建置 ${APP_NAME} Release 版本..."
 swift build -c release
