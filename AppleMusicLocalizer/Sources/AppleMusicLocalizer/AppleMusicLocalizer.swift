@@ -179,7 +179,7 @@ struct ContentView: View {
                 
                 Spacer()
                 
-                Text("v1.0.7")
+                Text("v1.0.8")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
@@ -226,17 +226,14 @@ struct ContentView: View {
                     if let artist = track.proposedArtist, track.hasProposal {
                         Text("→ \(artist)")
                     }
-                    if let propAlbumArtist = track.proposedAlbumArtist, !propAlbumArtist.utf8.elementsEqual(track.albumArtist.utf8) {
+                    if let propAlbumArtist = track.proposedAlbumArtist, propAlbumArtist != track.albumArtist {
                         Text("（專輯歌手：\(track.albumArtist) → \(propAlbumArtist)）")
                             .foregroundStyle(.orange)
-                    } else if let propArtist = track.proposedArtist, !track.sortArtist.isEmpty, !track.sortArtist.utf8.elementsEqual(propArtist.utf8) {
+                    } else if let propArtist = track.proposedArtist, !track.sortArtist.isEmpty, track.sortArtist != propArtist {
                         Text("（排序歌手：\(track.sortArtist) → \(propArtist)）")
                             .foregroundStyle(.orange)
-                    } else if let propAlbum = track.proposedAlbum, !track.sortAlbum.isEmpty, !track.sortAlbum.utf8.elementsEqual(propAlbum.utf8) {
+                    } else if let propAlbum = track.proposedAlbum, !track.sortAlbum.isEmpty, track.sortAlbum != propAlbum {
                         Text("（排序專輯：\(track.sortAlbum) → \(propAlbum)）")
-                            .foregroundStyle(.orange)
-                    } else if let propName = track.proposedName, propName == track.name, !propName.utf8.elementsEqual(track.name.utf8) {
-                        Text("（修正日文濁音編碼 NFD → NFC）")
                             .foregroundStyle(.orange)
                     }
                 }

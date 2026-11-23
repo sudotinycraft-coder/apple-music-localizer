@@ -21,12 +21,12 @@ final class MusicManager: ObservableObject {
 
     var hasAlbumProposal: Bool {
         guard let proposedAlbumName, let albumName else { return false }
-        return !proposedAlbumName.isEmpty && !proposedAlbumName.utf8.elementsEqual(albumName.utf8)
+        return !proposedAlbumName.isEmpty && proposedAlbumName != albumName
     }
 
     var hasAlbumArtistProposal: Bool {
         guard let proposedAlbumArtistName, let albumArtistName else { return false }
-        return !proposedAlbumArtistName.isEmpty && !proposedAlbumArtistName.utf8.elementsEqual(albumArtistName.utf8)
+        return !proposedAlbumArtistName.isEmpty && proposedAlbumArtistName != albumArtistName
     }
 
     func fetchCurrentAlbum() {
@@ -282,7 +282,7 @@ final class MusicManager: ObservableObject {
                 return updated
             }
             proposedAlbumName = proposedAlbumNFC
-            updateAlbumName = !proposedAlbumNFC.utf8.elementsEqual((albumName ?? "").utf8)
+            updateAlbumName = proposedAlbumNFC != (albumName ?? "")
             let mapped = tracks.filter(\.hasProposal).count
             if mapped == 0 && !hasAlbumProposal && !hasAlbumArtistProposal {
                 statusMessage = "API 專輯「\(proposedAlbumNFC)」配對成功，目前專輯與曲目皆已為原文名稱（可點選右側強制合併同名分類）"
@@ -322,13 +322,25 @@ final class MusicManager: ObservableObject {
         // 始終對同專輯所有曲目統一寫入專輯名稱、專輯演出者與排序欄位，徹底防止同張專輯在 Apple Music 中被拆散為兩個分類
         let tracksToUpdate = tracks
 
-        let args = [targetAlbumArtist] + tracksToUpdate.flatMap { track -> [String] in
+        // 計算全專輯標準化的光碟總數與各光碟軌數總計（徹底防止軌數與光碟資訊矛盾導致專輯分裂）
+        let maxDiscNumber = max(tracksToUpdate.map(\.discNumber).max() ?? 1, 1)
+        let tracksByDisc = Dictionary(grouping: tracksToUpdate, by: \.discNumber)
+        let trackCountByDisc = tracksByDisc.mapValues { discTracks in
+            max(discTracks.map(\.trackNumber).max() ?? discTracks.count, discTracks.count)
+        }
+
+        let forceRefreshFlag = (forceMergeAll || shouldUpdateAlbum) ? "1" : "0"
+
+        let args = [targetAlbumArtist, forceRefreshFlag] + tracksToUpdate.flatMap { track -> [String] in
             let isTrackSelected = selectedIDs.contains(track.id)
             let newName = (isTrackSelected ? (track.proposedName ?? track.name) : track.name).precomposedStringWithCanonicalMapping
             let newArtist = (isTrackSelected ? (track.proposedArtist ?? track.artist) : (track.proposedArtist ?? track.artist)).precomposedStringWithCanonicalMapping
             let newAlbumArtist = (track.proposedAlbumArtist ?? (!targetAlbumArtist.isEmpty ? targetAlbumArtist : newArtist)).precomposedStringWithCanonicalMapping
             let newAlbum = (!targetAlbum.isEmpty ? targetAlbum : track.album).precomposedStringWithCanonicalMapping
-            return [track.id, newName, newArtist, newAlbumArtist, newAlbum]
+            let discNum = max(track.discNumber, 1)
+            let discCnt = maxDiscNumber
+            let trkCnt = trackCountByDisc[track.discNumber] ?? max(track.trackNumber, tracksToUpdate.count)
+            return [track.id, newName, newArtist, newAlbumArtist, newAlbum, String(discNum), String(discCnt), String(trkCnt)]
         }
 
         backups = tracksToUpdate.map {
@@ -352,24 +364,19 @@ final class MusicManager: ObservableObject {
             return ((current application's NSString's stringWithString:str)'s precomposedStringWithCanonicalMapping()) as text
         end toNFC
 
-        on toNFD(str)
-            if str is "" then return ""
-            return ((current application's NSString's stringWithString:str)'s decomposedStringWithCanonicalMapping()) as text
-        end toNFD
-
         on run argv
-            set targetArtistNFC to my toNFC(item 1 of argv)
-            set targetArtistNFD to my toNFD(targetArtistNFC)
-            set tempArtist to targetArtistNFC & "_merge"
-
+            set targetAlbumArtist to item 1 of argv
+            set shouldForceRefresh to (item 2 of argv is "1")
             tell application "Music"
-                -- 第一階段：更新目前專輯所有曲目，並先將 album 設為暫存名以強制 Music.app 重建專輯索引（消除兩個同名專輯）
-                repeat with i from 2 to (count of argv) by 5
+                repeat with i from 3 to (count of argv) by 8
                     set targetID to item i of argv
                     set newName to my toNFC(item (i + 1) of argv)
                     set newArtist to my toNFC(item (i + 2) of argv)
                     set newAlbumArtist to my toNFC(item (i + 3) of argv)
                     set newAlbum to my toNFC(item (i + 4) of argv)
+                    set newDiscNum to (item (i + 5) of argv) as integer
+                    set newDiscCnt to (item (i + 6) of argv) as integer
+                    set newTrkCnt to (item (i + 7) of argv) as integer
                     try
                         set targetTrack to first track of library playlist 1 whose persistent ID is targetID
                         set name of targetTrack to newName
@@ -383,47 +390,37 @@ final class MusicManager: ObservableObject {
                         set sort album of targetTrack to newAlbum
                         set artist of targetTrack to newArtist
                         set album artist of targetTrack to newAlbumArtist
-                        set album of targetTrack to (newAlbum & "_merge")
-                    on error errorMessage
-                        return "ERROR|||" & errorMessage
-                    end try
-                end repeat
-
-                -- 第二階段：將目前專輯所有曲目的 album 統一寫回正式 NFC 名稱，使所有曲目歸戶至單一專輯
-                repeat with i from 2 to (count of argv) by 5
-                    set targetID to item i of argv
-                    set newAlbum to my toNFC(item (i + 4) of argv)
-                    try
-                        set targetTrack to first track of library playlist 1 whose persistent ID is targetID
                         set album of targetTrack to newAlbum
+                        if newDiscNum > 0 then set disc number of targetTrack to newDiscNum
+                        if newDiscCnt > 0 then set disc count of targetTrack to newDiscCnt
+                        if newTrkCnt > 0 then set track count of targetTrack to newTrkCnt
+                        set compilation of targetTrack to false
                     on error errorMessage
                         return "ERROR|||" & errorMessage
                     end try
                 end repeat
 
-                -- 第三階段：掃描本機資料庫中所有已為該原文歌手（含 NFC/NFD）的曲目，統一其 sort artist / album artist 並強制合併同名歌手分類
-                if targetArtistNFC is not "" then
-                    set sameArtistTracks to (every track of library playlist 1 whose artist is targetArtistNFC or artist is targetArtistNFD or album artist is targetArtistNFC or album artist is targetArtistNFD)
-                    repeat with t in sameArtistTracks
+                -- 若為強制合併或更新專輯名稱，執行專輯與演出者快取刷新循環，迫使 Apple Music 核心索引器聚合分離卡片與演出者分類
+                if shouldForceRefresh then
+                    repeat with i from 3 to (count of argv) by 8
+                        set targetID to item i of argv
+                        set newAlbum to my toNFC(item (i + 4) of argv)
+                        set newAlbumArtist to my toNFC(item (i + 3) of argv)
                         try
-                            set tNameNFC to my toNFC(name of t as text)
-                            set tAlbumNFC to my toNFC(album of t as text)
-                            if (name of t as text) is not tNameNFC then set name of t to tNameNFC
-                            set sort artist of t to targetArtistNFC
-                            set sort album artist of t to targetArtistNFC
-                            set sort album of t to tAlbumNFC
-                            if (album of t as text) is not tAlbumNFC then
-                                set album of t to (tAlbumNFC & "_merge")
-                                set album of t to tAlbumNFC
-                            end if
-                            set artist of t to tempArtist
-                            set album artist of t to tempArtist
+                            set targetTrack to first track of library playlist 1 whose persistent ID is targetID
+                            set album of targetTrack to (newAlbum & "_refresh")
+                            set album artist of targetTrack to (newAlbumArtist & "_refresh")
                         end try
                     end repeat
-                    repeat with t in sameArtistTracks
+                    delay 0.3
+                    repeat with i from 3 to (count of argv) by 8
+                        set targetID to item i of argv
+                        set newAlbum to my toNFC(item (i + 4) of argv)
+                        set newAlbumArtist to my toNFC(item (i + 3) of argv)
                         try
-                            set artist of t to targetArtistNFC
-                            set album artist of t to targetArtistNFC
+                            set targetTrack to first track of library playlist 1 whose persistent ID is targetID
+                            set album of targetTrack to newAlbum
+                            set album artist of targetTrack to newAlbumArtist
                         end try
                     end repeat
                 end if
@@ -509,7 +506,6 @@ final class MusicManager: ObservableObject {
                         if oldSortAlbum is not "" then
                             set sort album of targetTrack to oldSortAlbum
                         end if
-                        set album of targetTrack to (oldAlbum & "_merge")
                         set album of targetTrack to oldAlbum
                     on error errorMessage
                         return "ERROR|||" & errorMessage

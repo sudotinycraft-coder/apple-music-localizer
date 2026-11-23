@@ -21,11 +21,11 @@ struct LocalTrack: Identifiable {
 
     var hasProposal: Bool {
         guard let proposedName else { return false }
-        if !proposedName.utf8.elementsEqual(name.utf8) { return true }
-        if let proposedArtist, !proposedArtist.utf8.elementsEqual(artist.utf8) { return true }
-        if let proposedAlbumArtist, !proposedAlbumArtist.utf8.elementsEqual(albumArtist.utf8) { return true }
-        if let proposedArtist, !sortArtist.isEmpty, !sortArtist.utf8.elementsEqual(proposedArtist.utf8) { return true }
-        if let proposedAlbum, !sortAlbum.isEmpty, !sortAlbum.utf8.elementsEqual(proposedAlbum.utf8) { return true }
+        if proposedName != name { return true }
+        if let proposedArtist, proposedArtist != artist { return true }
+        if let proposedAlbumArtist, proposedAlbumArtist != albumArtist { return true }
+        if let proposedArtist, !sortArtist.isEmpty, sortArtist != proposedArtist { return true }
+        if let proposedAlbum, !sortAlbum.isEmpty, sortAlbum != proposedAlbum { return true }
         return false
     }
 }
